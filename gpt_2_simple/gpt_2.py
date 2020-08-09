@@ -25,6 +25,8 @@ from gpt_2_simple.src import model, sample, encoder, memory_saving_gradients
 from gpt_2_simple.src.load_dataset import load_dataset, Sampler
 from gpt_2_simple.src.accumulate import AccumulatingOptimizer
 
+from tokenizers import ByteLevelBPETokenizer
+
 assert tf.__version__ < '2.0.0', "gpt-2-simple currently does not support " \
     "TensorFlow 2.0. You'll need to use a virtualenv/cloud computer which " \
     "has Tensorflow 1.X on it."
@@ -41,10 +43,10 @@ def download_file_with_progress(url_base, sub_dir, model_name, file_name):
     file_name : str
         name of file to get e.g. "hparams.json"
     sub_dir: str
-        subdirectory inside which to get and copy locally eg. "models/124M" 
+        subdirectory inside which to get and copy locally eg. "models/124M"
         no trailing slash
     url_base : str
-        Start of URL location specifying server and any base directories no 
+        Start of URL location specifying server and any base directories no
         trailing slash
         e.g. "https://storage.googleapis.com/gpt-2"
     """
@@ -59,7 +61,7 @@ def download_file_with_progress(url_base, sub_dir, model_name, file_name):
             for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
                 f.write(chunk)
                 pbar.update(DOWNLOAD_CHUNK_SIZE)
-   
+
 
 def download_gpt2(model_dir='models', model_name='124M'):
     """Downloads the GPT-2 model into the current directory
@@ -71,8 +73,8 @@ def download_gpt2(model_dir='models', model_name='124M'):
         parent directory of model to download
 
     model_name : str
-        name of the GPT-2 model to download. 
-        As of 22 May 2019 one of "124M" or "355M" but may later include other 
+        name of the GPT-2 model to download.
+        As of 22 May 2019 one of "124M" or "355M" but may later include other
         model sizes
 
     Adapted from https://github.com/openai/gpt-2/blob/master/download_model.py
@@ -106,7 +108,7 @@ def start_tf_sess(threads=-1, server=None):
 
     if server is not None:
         return tf.compat.v1.Session(target=server.target, config=config)
-    
+
     return tf.compat.v1.Session(config=config)
 
 
@@ -146,7 +148,9 @@ def finetune(sess,
              use_memory_saving_gradients=False,
              only_train_transformer_layers=False,
              optimizer='adam',
-             overwrite=False):
+             overwrite=False,
+             vocab_file=None,
+             merges_file=None):
     """Finetunes the model on the given dataset.
 
     Adapted from https://github.com/nshepperd/gpt-2/blob/finetuning/train.py.
@@ -175,7 +179,8 @@ def finetune(sess,
             print("You need to download the GPT-2 model first via download_gpt2()")
             raise(fnf_error)
 
-    enc = encoder.get_encoder(checkpoint_path)
+    # enc = encoder.get_encoder(checkpoint_path)
+    tokenizer = ByteLevelBPETokenizer(vocab_file, merges_file)
     hparams = model.default_hparams()
     with open(os.path.join(checkpoint_path, 'hparams.json')) as f:
         hparams.override_from_dict(json.load(f))
@@ -257,7 +262,7 @@ def finetune(sess,
     saver.restore(sess, ckpt)
 
     print('Loading dataset...')
-    chunks = load_dataset(enc, dataset, combine)
+    chunks = load_dataset(dataset, combine)
     data_sampler = Sampler(chunks)
     print('dataset has', data_sampler.total_size, 'tokens')
     print('Training...')
@@ -293,7 +298,8 @@ def finetune(sess,
                 tf_sample,
                 feed_dict={context: batch_size * [context_tokens]})
             for i in range(min(sample_num - index, batch_size)):
-                text = enc.decode(out[i])
+                # text = enc.decode(out[i])
+                text = tokenizer.decode(out[i])
                 text = '======== SAMPLE {} ========\n{}\n'.format(
                     index + 1, text)
                 all_text.append(text)
@@ -319,7 +325,7 @@ def finetune(sess,
 
     if steps:
         steps = int(steps)
-    
+
     try:
         while True:
             if steps > 0 and counter == (counter_base + steps):
@@ -450,7 +456,8 @@ def generate(sess,
 
     if prefix:
         context = tf.compat.v1.placeholder(tf.int32, [batch_size, None])
-        context_tokens = enc.encode(prefix)
+        # context_tokens = enc.encode(prefix)
+        context_tokens = tokenizer.encode(prefix)
 
     np.random.seed(seed)
     tf.compat.v1.set_random_seed(seed)
@@ -458,7 +465,8 @@ def generate(sess,
     output = sample.sample_sequence(
         hparams=hparams,
         length=min(length, 1023 - (len(context_tokens) if prefix else 0)),
-        start_token=enc.encoder['<|endoftext|>'] if not prefix else None,
+        # start_token=enc.encoder['<|endoftext|>'] if not prefix else None,
+        start_token=tokenizer.encode("<|endoftext|>").ids[0] if not prefix else None,  # TODO
         context=context if prefix else None,
         batch_size=batch_size,
         temperature=temperature, top_k=top_k, top_p=top_p
@@ -477,9 +485,11 @@ def generate(sess,
                 })
         for i in range(batch_size):
             generated += 1
-            gen_text = enc.decode(out[i])
+            # gen_text = enc.decode(out[i])
+            gen_text = tokenizer.decode(out[i])
             if prefix:
-                gen_text = enc.decode(context_tokens[:1]) + gen_text
+                # gen_text = enc.decode(context_tokens[:1]) + gen_text
+                gen_text = tokenizer.decode(context_tokens[:1]) + gen_text
             if truncate:
                 truncate_esc = re.escape(truncate)
                 if prefix and not include_prefix:
@@ -657,7 +667,7 @@ def encode_dataset(file_path, model_dir='models', out_path='text_encoded.npz',
     model_path = os.path.join(model_dir, model_name)
     enc = encoder.get_encoder(model_path)
     print('Reading files')
-    chunks = load_dataset(enc, file_path, combine)
+    chunks = load_dataset(file_path, combine)
     print('Writing', out_path)
     np.savez_compressed(out_path, *chunks)
 
@@ -670,7 +680,7 @@ def cmd():
     )
 
     # Explicit arguments
-    
+
     parser.add_argument(
         '--mode', help='Mode for using the CLI (either "finetune" or "generate") [Required]', nargs='?')
     parser.add_argument(

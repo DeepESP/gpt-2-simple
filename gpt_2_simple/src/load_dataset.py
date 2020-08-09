@@ -7,7 +7,7 @@ import tqdm
 import csv
 
 
-def load_dataset(enc, path, combine):
+def load_dataset(path, combine):
     paths = []
     if os.path.isfile(path):
         # Simple file
@@ -22,34 +22,12 @@ def load_dataset(enc, path, combine):
         paths = glob.glob(path)
 
     token_chunks = []
-    raw_text = ''
     for path in tqdm.tqdm(paths):
         if path.endswith('.npz'):
             # Pre-encoded
             with np.load(path) as npz:
                 for item in npz.files:
                     token_chunks.append(npz[item])
-        elif path.endswith('.csv'):
-            start_token = "<|startoftext|>"
-            end_token = "<|endoftext|>"
-            with open(path, 'r', encoding='utf8', errors='ignore') as fp:
-                fp.readline()   # skip header
-                reader = csv.reader(fp)
-                for row in reader:
-                    raw_text += start_token + row[0] + end_token + "\n"
-        else:
-            # Plain text
-            with open(path, 'r', encoding='utf8', errors='ignore') as fp:
-                raw_text += fp.read()
-            if len(raw_text) >= combine:
-                tokens = np.stack(enc.encode(raw_text))
-                token_chunks.append(tokens)
-                raw_text = ''
-            else:
-                raw_text += '<|endoftext|>'
-    if raw_text:
-        tokens = np.stack(enc.encode(raw_text))
-        token_chunks.append(tokens)
     return token_chunks
 
 
